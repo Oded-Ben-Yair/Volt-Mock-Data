@@ -15,12 +15,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+BASE_DIR = os.path.dirname(__file__)
+json_path = os.path.join(BASE_DIR, "retell_mock_full_dataset.json")
+
 try:
-    with open("retell_mock_full_dataset.json", "r") as f:
+    with open(json_path, "r") as f:
         mock_data = json.load(f)
 except FileNotFoundError:
     mock_data = {"orders": []}
-    print("⚠️ WARNING: Mock dataset not found. Using empty dataset.")
+    print("⚠️ WARNING: retell_mock_full_dataset.json not found. Using empty dataset.")
 
 orders = mock_data["orders"]
 
