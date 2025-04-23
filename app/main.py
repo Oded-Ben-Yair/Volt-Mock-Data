@@ -1,145 +1,100 @@
-"""
-Volt Mock API – Render-ready
-────────────────────────────
-* Auto-detects Reverse-Proxy root_path (X-Forwarded-Prefix)
-* Loads mock dataset once and fails fast if file missing
-* Accepts both:
-    ① {"order_id": "..."}  – manual cURL
-    ② {"args": {"order_id": "..."}}  – Retell Function Nodes
-* Health-check endpoint  GET /
-* Structured logging
-"""
-
+"""Volt Mock API – Render-ready v2 (dict-based, KeyError-proof)"""
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
 from pathlib import Path
-import logging
-import json
-import os
+import logging, json, os
 
-# ───────────────────────── Logging
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
+logging.basicConfig(level="INFO",
+                    format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("volt-mock")
 
-# ───────────────────────── Data Load
+# ───── dataset ────────────────────────────────────────────────────────────
 DATA_PATH = Path(__file__).parent / "retell_mock_full_dataset.json"
 if not DATA_PATH.exists():
-    log.error("❌  mock dataset %s not found – aborting startup", DATA_PATH)
     raise FileNotFoundError(DATA_PATH)
 
 with DATA_PATH.open() as f:
-    orders = json.load(f)
+    raw = json.load(f)
 
-log.info("✅  loaded %s orders from %s", len(orders), DATA_PATH.name)
+if isinstance(raw, list):
+    orders_by_id = {o["order_id"]: o for o in raw}
+elif isinstance(raw, dict):
+    orders_by_id = raw
+else:
+    raise TypeError("Unsupported dataset format")
 
-# ───────────────────────── FastAPI app
+log.info("✅  loaded %s orders", len(orders_by_id))
+
+# ───── app & CORS ─────────────────────────────────────────────────────────
 app = FastAPI(root_path=os.getenv("ROOT_PATH", ""))
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+                   allow_methods=["*"], allow_headers=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ───────────────────────── Helpers
-def _get(param: str, body: dict, required: bool = True):
-    """Return param from body or body['args'] wrapper."""
-    val = body.get(param)
-    if val is None and isinstance(body.get("args"), dict):
-        val = body["args"].get(param)
-    if required and val in (None, ""):
-        raise HTTPException(status_code=422, detail=f"Missing parameter: {param}")
+def _arg(body: dict, key: str, required=True):
+    val = body.get(key) or body.get("args", {}).get(key)
+    if required and not val:
+        raise HTTPException(422, f"Missing parameter: {key}")
     return val
 
-
-# ───────────────────────── Endpoints
 @app.get("/")
-async def health():
-    """Simple health-check."""
+async def health():  # render health-check
     return {"status": "ok", "ts": datetime.utcnow().isoformat() + "Z"}
-
 
 @app.post("/check_order_status")
 async def check_order_status(req: Request):
-    body = await req.json()
-    order_id = _get("order_id", body)
+    body      = await req.json()
+    order_id  = _arg(body, "order_id")
+    order     = orders_by_id.get(order_id)
+    if not order:
+        raise HTTPException(404, f"Order {order_id} not found")
 
-    for order in orders:
-        if order["order_id"] == order_id:
-            return {
-                "status": order["status"],
-                "vendor_name": order["vendor_name"],
-                "eta": order["delivery_eta"],
-            }
-
-    raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
-
+    return {
+        "status":      order.get("status", "unknown"),
+        "vendor_name": order.get("vendor_name", "Volt"),
+        "eta":         order.get("delivery_eta") or order.get("eta")
+    }
 
 @app.post("/cancel_order")
 async def cancel_order(req: Request):
-    body = await req.json()
-    order_id = _get("order_id", body)
-
-    for order in orders:
-        if order["order_id"] == order_id:
-            if order.get("can_cancel"):
-                return {"success": True, "message": f"Order {order_id} canceled."}
-            return {"success": False, "message": f"Order {order_id} can no longer be canceled."}
-
-    raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
-
+    body     = await req.json()
+    order_id = _arg(body, "order_id")
+    order    = orders_by_id.get(order_id)
+    if not order:
+        raise HTTPException(404, f"Order {order_id} not found")
+    if order.get("can_cancel"):
+        order["status"] = "canceled"
+        return {"success": True, "message": f"Order {order_id} canceled."}
+    return {"success": False, "message": f"Order {order_id} can no longer be canceled."}
 
 @app.post("/request_refund")
 async def request_refund(req: Request):
-    body = await req.json()
-    order_id = _get("order_id", body)
-    reason   = _get("reason", body)
-
-    for order in orders:
-        if order["order_id"] == order_id:
-            if order.get("eligible_for_refund"):
-                return {
-                    "approved": True,
-                    "refund_amount": order.get("refund_amount", 0),
-                    "reason_ack": reason,
-                }
-            return {"approved": False, "message": f"Order {order_id} is not eligible for a refund"}
-
-    raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
-
+    body      = await req.json()
+    order_id  = _arg(body, "order_id")
+    reason    = _arg(body, "reason")
+    order     = orders_by_id.get(order_id)
+    if not order:
+        raise HTTPException(404, f"Order {order_id} not found")
+    if order.get("eligible_for_refund"):
+        return {"approved": True, "refund_amount": order.get("refund_amount", 0),
+                "reason_ack": reason}
+    return {"approved": False, "message": "Order not eligible for refund"}
 
 @app.post("/create_ticket")
 async def create_ticket(req: Request):
     body       = await req.json()
-    issue_type = _get("issue_type", body)
-    user_notes = _get("user_notes", body)
-    order_id   = _get("order_id", body, required=False)
-
-    ticket_id = f"volt-{datetime.utcnow().timestamp():.0f}"
-    return {
-        "ticket_id": ticket_id,
-        "issue_type": issue_type,
-        "order_id": order_id,
-        "notes_saved": bool(user_notes),
-    }
-
+    issue_type = _arg(body, "issue_type")
+    user_notes = _arg(body, "user_notes")
+    order_id   = _arg(body, "order_id", required=False)
+    tid        = f"volt-{int(datetime.utcnow().timestamp())}"
+    return {"ticket_id": tid, "issue_type": issue_type,
+            "order_id": order_id, "notes_saved": bool(user_notes)}
 
 @app.post("/log_call")
 async def log_call(req: Request):
-    body         = await req.json()
-    call_summary = _get("call_summary", body)
-    sentiment    = _get("sentiment", body)
-    timestamp    = _get("timestamp", body)
-
-    log.info("📝 LOG_CALL | %s | %s", sentiment, call_summary[:80])
+    body = await req.json()
+    log.info("📝 LOG_CALL %s", {k: body.get(k) or body.get('args', {}).get(k) for k in body})
     return {"stored": True}
-
 
 @app.post("/get_current_datetime")
 async def get_current_datetime():
