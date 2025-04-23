@@ -1,6 +1,7 @@
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from datetime import datetime
 import json
 import os
@@ -38,7 +39,7 @@ async def check_order_status(req: Request):
                 "vendor_name": order["vendor_name"],
                 "eta": order["delivery_eta"]
             }
-    raise HTTPException(status_code=404, detail="Order not found")
+    return JSONResponse(status_code=404, content={"detail": "Order not found"})
 
 @app.post("/cancel_order")
 async def cancel_order(req: Request):
@@ -50,7 +51,7 @@ async def cancel_order(req: Request):
                 return {"message": f"Order {order_id} has been canceled successfully."}
             else:
                 return {"message": f"Order {order_id} can no longer be canceled."}
-    raise HTTPException(status_code=404, detail="Order not found")
+    return JSONResponse(status_code=404, content={"detail": "Order not found"})
 
 @app.post("/request_refund")
 async def request_refund(req: Request):
@@ -63,7 +64,7 @@ async def request_refund(req: Request):
                 return {"message": f"Refund for order {order_id} has been processed for reason: {reason}."}
             else:
                 return {"message": f"Order {order_id} is not eligible for a refund based on current policy."}
-    raise HTTPException(status_code=404, detail="Order not found")
+    return JSONResponse(status_code=404, content={"detail": "Order not found"})
 
 @app.post("/create_ticket")
 async def create_ticket(req: Request):
