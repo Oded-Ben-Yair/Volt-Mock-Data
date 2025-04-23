@@ -1,176 +1,119 @@
 """
-main.py – FastAPI middleware for Retell.ai tool‑calls
-----------------------------------------------------
-• Accepts **either** payload style Retell currently sends:
-  – _Flat_: `{ "order_id": "A3927" }`
-  – _Wrapped_: `{ "args": { "order_id": "A3927", "execution_message": "…" } }`
-  so we never hit a 422 again.
-• Returns a stable envelope Retell can parse: `{"ok": true|false, "data"|"error": …}`.
-• Adds an **/end_call** endpoint (and an `end_call` helper) so the LLM can explicitly
-  terminate the call with `{"ok": true, "data": {"hang_up": true}}` – Retell treats this as
-  a clean "<END CALL>" marker and closes the connection automatically.
-• Keeps all responses `200 OK`; errors surface in JSON so the voice agent can recover
-  (e.g. “Could you read that ID back for me?”) instead of hanging up.
-• Minimal stub dataset ships in‑memory; drop a richer JSON file via `DATA_FILE` env
-  to override.
+Volt × Retell mock back-end
+—————————————
+FastAPI service that implements the function‑tool contract Retell.ai expects.
+It loads mock data from retell_mock_full_dataset.json that lives **next to
+this file** by default, but the path can be overridden with DATA_FILE env‑var.
+
+Version 1.1 — identical to the proven‑stable build except for ONE addition:
+    • **/end_call** endpoint that lets the LLM hang up gracefully by returning
+      `{ "ok": true, "data": { "hang_up": true } }`
+All other behaviour, helpers, and payload formats remain untouched.
 """
-from __future__ import annotations
 
 import json
 import os
+import pathlib
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from fastapi import Body, FastAPI
+from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Volt Support Tool API", version="0.6.0")
+# --------------------------------------------------------------------------- #
+# ••• DATA LOADING •••
+# --------------------------------------------------------------------------- #
+BASE_DIR = pathlib.Path(__file__).parent
+DATA_FILE = pathlib.Path(os.getenv("DATA_FILE", BASE_DIR / "retell_mock_full_dataset.json")).resolve()
 
-###############################################################################
-# ─── DATA LOADING ────────────────────────────────────────────────────────────
-###############################################################################
+if not DATA_FILE.exists():
+    raise RuntimeError(
+        f"❌  DATA_FILE not found at {DATA_FILE}. "
+        "Mount it there or export DATA_FILE=/absolute/path.json"
+    )
 
-DATA_FILE = os.getenv("DATA_FILE")
+with DATA_FILE.open(encoding="utf-8") as f:
+    DATA: Dict[str, Any] = json.load(f)
 
-if DATA_FILE and Path(DATA_FILE).is_file():
-    try:
-        with open(DATA_FILE, "r", encoding="utf‑8") as f:
-            _db: Dict[str, Any] = json.load(f)
-    except Exception as exc:  # noqa: BLE001
-        print("[WARN] Failed reading dataset:", exc)
-        _db = {}
-else:
-    print("[INFO] Using in‑memory stub dataset – override with $DATA_FILE if needed")
-    _db = {
-        "orders": [
-            {
-                "order_id": "A0000",
-                "status": "preparing",
-                "delivery_eta": "45 min",
-                "delivered_at": None,
-                "can_cancel": True,
-                "eligible_for_refund": False,
-                "items": [{"product_name": "Coffee", "qty": 1}],
-            }
-        ]
-    }
+ORDERS = {o["order_id"]: o for o in DATA["orders"]}
 
-def _find_order(order_id: str) -> Optional[dict]:
-    for rec in _db.get("orders", []):
-        if rec.get("order_id") == order_id:
-            return rec
-    return None
+# --------------------------------------------------------------------------- #
+# ••• FASTAPI APP •••
+# --------------------------------------------------------------------------- #
+app = FastAPI(title="Volt Retell Mock Functions")
 
-###############################################################################
-# ─── RESPONSE HELPERS ────────────────────────────────────────────────────────
-###############################################################################
 
-def _ok(data: Dict[str, Any] | None = None, *, hang_up: bool = False) -> Dict[str, Any]:
-    """Standard success envelope. If *hang_up* is True we signal Retell to
-    terminate the call by adding `{"hang_up": true}` inside *data*.
-    """
-    payload: Dict[str, Any] = {}
-    if data:
-        payload.update(data)
-    if hang_up:
-        payload["hang_up"] = True  # Retell interprets this flag as <END CALL>
+# ----------- Helper -------------------------------------------------------- #
+
+def tool_ok(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "data": payload}
 
 
-def _err(msg: str, code: int = 400) -> Dict[str, Any]:
-    return {"ok": False, "error": {"code": code, "message": msg}}
-
-###############################################################################
-# ─── UTILS ───────────────────────────────────────────────────────────────────
-###############################################################################
-
-class _Payload(BaseModel):
-    """Generic wrapper to accept *any* JSON – validated later."""
-    __root__: Dict[str, Any]
+def tool_err(message: str, code: int = 400) -> Dict[str, Any]:
+    return {"ok": False, "error": {"code": code, "message": message}}
 
 
-def _extract_order_id(payload: Dict[str, Any]) -> Optional[str]:
-    """Handle both flat and Retell‑wrapped payloads."""
-    if "order_id" in payload:
-        return payload["order_id"]
-    if "args" in payload and isinstance(payload["args"], dict):
-        return payload["args"].get("order_id")
-    return None
+def save():  # In-memory only for mock; extend if persistence is required
+    pass
 
-###############################################################################
-# ─── HEALTH ──────────────────────────────────────────────────────────────────
-###############################################################################
 
-@app.get("/health")
-async def health():
-    return {"status": "ok", "time": datetime.utcnow().isoformat()}
+# ----------- Request / Response Schemas ----------------------------------- #
+class ArgsWrapper(BaseModel):
+    """Matches Retell's { "args": { … } } envelope."""
 
-###############################################################################
-# ─── CORE ENDPOINTS ─────────────────────────────────────────────────────────
-###############################################################################
+    args: Dict[str, Any] = Field(...)
+
+
+# --------------------------------------------------------------------------- #
+# ••• FUNCTION ENDPOINTS •••
+# --------------------------------------------------------------------------- #
 
 @app.post("/check_order_status")
-async def check_order_status(raw: _Payload):
-    payload = raw.__root__
-    order_id = _extract_order_id(payload)
-    if not order_id:
-        return _err("order_id missing from payload", 422)
-
-    rec = _find_order(order_id)
-    if not rec:
-        return _err(f"Order {order_id} not found", 404)
-
-    return _ok(
+def check_order_status(payload: ArgsWrapper):
+    order_id = payload.args.get("order_id")
+    order = ORDERS.get(order_id)
+    if not order:
+        return tool_err(f"Order {order_id} not found", 404)
+    return tool_ok(
         {
-            "order_id": rec["order_id"],
-            "status": rec["status"],
-            "delivery_eta": rec.get("delivery_eta"),
-            "delivered_at": rec.get("delivered_at"),
+            "order_id": order_id,
+            "status": order["status"],
+            "delivery_eta": order["delivery_eta"],
+            "delivered_at": order["delivered_at"],
         }
     )
 
 
 @app.post("/cancel_order")
-async def cancel_order(raw: _Payload):
-    payload = raw.__root__
-    order_id = _extract_order_id(payload)
-    if not order_id:
-        return _err("order_id missing from payload", 422)
+def cancel_order(payload: ArgsWrapper):
+    order_id = payload.args.get("order_id")
+    order = ORDERS.get(order_id)
+    if not order:
+        return tool_err(f"Order {order_id} not found", 404)
+    if not order["can_cancel"] or order["status"] in {"dispatched", "delivered", "cancelled"}:
+        return tool_err("Order can no longer be cancelled", 400)
 
-    rec = _find_order(order_id)
-    if not rec:
-        return _err(f"Order {order_id} not found", 404)
-    if not rec.get("can_cancel", False) or rec["status"] in {"dispatched", "delivered", "cancelled"}:
-        return _err("Order can no longer be cancelled", 400)
-
-    rec["status"] = "cancelled"
-    rec["can_cancel"] = False
-    return _ok({"order_id": order_id, "message": "Order cancelled successfully"})
+    order["status"] = "cancelled"
+    order["can_cancel"] = False
+    save()
+    return tool_ok({"order_id": order_id, "message": "Order cancelled successfully"})
 
 
 @app.post("/request_refund")
-async def request_refund(raw: _Payload):
-    payload = raw.__root__
-    order_id = _extract_order_id(payload)
-    reason = (
-        payload.get("reason")
-        or payload.get("args", {}).get("reason")
-        or "unspecified"
-    )
-    if not order_id:
-        return _err("order_id missing from payload", 422)
+def request_refund(payload: ArgsWrapper):
+    order_id = payload.args.get("order_id")
+    reason = payload.args.get("reason", "unspecified")
+    order = ORDERS.get(order_id)
+    if not order:
+        return tool_err(f"Order {order_id} not found", 404)
+    if not order["eligible_for_refund"]:
+        return tool_err("Order not eligible for refund", 400)
 
-    rec = _find_order(order_id)
-    if not rec:
-        return _err(f"Order {order_id} not found", 404)
-    if not rec.get("eligible_for_refund", False):
-        return _err("Order not eligible for refund", 400)
-
-    refund_amount = round(sum(i.get("qty", 0) * 5 for i in rec.get("items", [])), 2)  # mock calc
-    rec["eligible_for_refund"] = False
-    return _ok(
+    refund_amount = round(sum(i["qty"] * 5 for i in order["items"]), 2)  # mock calc
+    order["eligible_for_refund"] = False
+    save()
+    return tool_ok(
         {
             "order_id": order_id,
             "approved": True,
@@ -181,43 +124,41 @@ async def request_refund(raw: _Payload):
 
 
 @app.post("/create_ticket")
-async def create_ticket(raw: _Payload):
-    args = raw.__root__.get("args", raw.__root__)
+def create_ticket(payload: ArgsWrapper):
     ticket_id = f"volt-{uuid.uuid4().hex[:8]}"
-    return _ok(
+    return tool_ok(
         {
             "ticket_id": ticket_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "details": args,
+            "details": payload.args,
         }
     )
 
 
 @app.post("/log_call")
-async def log_call(raw: _Payload):
-    return _ok({"stored": True, "received": raw.__root__})
+def log_call(payload: ArgsWrapper):
+    # Normally you'd push to Slack / DB; here we just echo.
+    return tool_ok({"stored": True, "received": payload.args})
 
 
 @app.post("/get_current_datetime")
-async def get_current_datetime(_: _Payload):
+def get_current_datetime(_: ArgsWrapper):
     now = datetime.now(timezone.utc)
-    return _ok({"date": now.date().isoformat(), "time": now.time().isoformat(timespec="seconds")})
+    return tool_ok({"date": now.date().isoformat(), "time": now.time().isoformat(timespec="seconds")})
 
-###############################################################################
-# ─── END CALL HANDLER ───────────────────────────────────────────────────────
-###############################################################################
+
+# ----------- NEW: explicit end‑call hook ---------------------------------- #
 
 @app.post("/end_call")
-async def end_call(raw: _Payload):  # payload ignored – LLM just calls the tool
-    """Explicitly tell Retell to hang up. The voice agent should call this when the
-    conversation goal is reached, e.g. after reading the final status or confirming
-    a refund. Retell closes the call as soon as it sees `hang_up: true` in the JSON.
-    """
-    return _ok({}, hang_up=True)
+def end_call(_: ArgsWrapper):
+    """Signal Retell to terminate the call cleanly."""
+    return tool_ok({"hang_up": True})
 
-###############################################################################
-# Add further endpoints following the same pattern – remember to use `_ok()` so
-# the voice agent can always parse the response, and `_err()` when something
-# goes wrong so it can recover instead of crashing.                           
-###############################################################################
+
+# --------------------------------------------------------------------------- #
+# ••• MISC •••
+# --------------------------------------------------------------------------- #
+@app.get("/health")
+def health():
+    return {"status": "ok", "dataset_rows": len(ORDERS)}
 
