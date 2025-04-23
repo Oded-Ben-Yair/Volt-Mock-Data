@@ -1,114 +1,189 @@
 """
 main.py – FastAPI middleware for Retell.ai tool‑calls
 ----------------------------------------------------
-• Works with **either** the mock JSON dataset (env `DATA_FILE`) **or** an in‑memory stub.
-• Keeps exactly the schema Retell passes when it calls a Function node: **just the tool
-  arguments** in the request body (e.g. `{"order_id": "A3927"}`), so we never hit a
-  422 again.
-• Returns clean, JSON‑serialisable data – nothing Retell can’t parse – and **always** a
-  `200 OK`, falling back to an `error` key when something’s wrong so the agent can ask
-  clarifying questions instead of hanging up.
-
-If you need additional endpoints, copy the pattern used below – each accepts the raw
-arguments payload in a pydantic model and spits back a self‑contained JSON response.
+• Accepts **either** payload style Retell currently sends:
+  – _Flat_: `{ "order_id": "A3927" }`
+  – _Wrapped_: `{ "args": { "order_id": "A3927", "execution_message": "…" } }`
+  so we never hit a 422 again.
+• Returns a stable envelope Retell can parse: `{"ok": true|false, "data"|"error": …}`.
+• Keeps all responses `200 OK`; errors are surfaced in the JSON so the voice
+  agent can recover (“Could you read that ID back for me?”) instead of hanging up.
+• Minimal stub dataset ships in‑memory; drop a richer JSON file via `DATA_FILE` env
+  to override.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Volt Support Tool API", version="0.4.0")
+app = FastAPI(title="Volt Support Tool API", version="0.5.0")
 
 ###############################################################################
 # ─── DATA LOADING ────────────────────────────────────────────────────────────
 ###############################################################################
 
-def _load_dataset() -> dict:
-    """Load mock dataset from DATA_FILE env or return an in‑memory stub."""
-    path = os.getenv("DATA_FILE")
-    if path and Path(path).is_file():
-        try:
-            with open(path, "r", encoding="utf‑8") as f:
-                return json.load(f)
-        except Exception as exc:  # noqa: BLE001
-            print("[WARN] Failed reading dataset:", exc)
-    # ── fallback stub ────────────────────────────────────────────────────────
-    print("[INFO] Using in‑memory stub dataset – order status will be random.")
-    return {
+DATA_FILE = os.getenv("DATA_FILE")
+
+if DATA_FILE and Path(DATA_FILE).is_file():
+    try:
+        with open(DATA_FILE, "r", encoding="utf‑8") as f:
+            _db: Dict[str, Any] = json.load(f)
+    except Exception as exc:  # noqa: BLE001
+        print("[WARN] Failed reading dataset:", exc)
+        _db = {}
+else:
+    print("[INFO] Using in‑memory stub dataset – override with $DATA_FILE if needed")
+    _db = {
         "orders": [
             {
                 "order_id": "A0000",
                 "status": "preparing",
                 "delivery_eta": "45 min",
                 "delivered_at": None,
+                "can_cancel": True,
+                "eligible_for_refund": False,
+                "items": [{"product_name": "Coffee", "qty": 1}],
             }
         ]
     }
 
-db = _load_dataset()
-
-###############################################################################
-# ─── SCHEMAS ─────────────────────────────────────────────────────────────────
-###############################################################################
-
-class CheckOrderStatusIn(BaseModel):
-    order_id: str = Field(..., examples=["A3927"])
-
-class CheckOrderStatusOut(BaseModel):
-    order_id: str
-    status: str
-    delivery_eta: Optional[str] = None
-    delivered_at: Optional[str] = None
-    error: Optional[str] = None
-
-###############################################################################
-# ─── HELPERS ────────────────────────────────────────────────────────────────
-###############################################################################
-
 def _find_order(order_id: str) -> Optional[dict]:
-    for rec in db.get("orders", []):
+    for rec in _db.get("orders", []):
         if rec.get("order_id") == order_id:
             return rec
     return None
 
 ###############################################################################
+# ─── RESPONSE HELPERS ────────────────────────────────────────────────────────
+###############################################################################
+
+def _ok(data: Dict[str, Any]) -> Dict[str, Any]:
+    return {"ok": True, "data": data}
+
+
+def _err(msg: str, code: int = 400) -> Dict[str, Any]:
+    return {"ok": False, "error": {"code": code, "message": msg}}
+
+###############################################################################
 # ─── ENDPOINTS ──────────────────────────────────────────────────────────────
 ###############################################################################
 
+class _CancelIn(BaseModel):
+    order_id: str = Field(..., examples=["A3927"])
+
+
+def _extract_order_id(payload: Dict[str, Any]) -> Optional[str]:
+    """Handle both flat and Retell‑wrapped payloads."""
+    if "order_id" in payload:
+        return payload["order_id"]
+    if "args" in payload and isinstance(payload["args"], dict):
+        return payload["args"].get("order_id")
+    return None
+
+
 @app.get("/health")
 async def health():
-    """Health probe used by Render / Fly.io etc."""
-    return {"status": "ok", "time": datetime.utcnow().isoformat()}  # simple and fast
+    return {"status": "ok", "time": datetime.utcnow().isoformat()}
 
 
-@app.post("/check_order_status", response_model=CheckOrderStatusOut)
-async def check_order_status(payload: CheckOrderStatusIn):
-    """Return status/ETA for an existing order.
+@app.post("/check_order_status")
+async def check_order_status(raw: Dict[str, Any] = Body(...)):
+    order_id = _extract_order_id(raw)
+    if not order_id:
+        return _err("order_id missing from payload", 422)
 
-    Retell will call this with **only** the tool‑arguments, so FastAPI must parse that
-    directly – no extra wrapper keys.
-    """
-    rec = _find_order(payload.order_id)
+    rec = _find_order(order_id)
     if not rec:
-        # 200 to Retell but with error info – the agent can then ask for a different ID.
-        return CheckOrderStatusOut(order_id=payload.order_id, status="unknown", error="Order not found")
+        return _err(f"Order {order_id} not found", 404)
 
-    return CheckOrderStatusOut(
-        order_id=rec["order_id"],
-        status=rec["status"],
-        delivery_eta=rec.get("delivery_eta"),
-        delivered_at=rec.get("delivered_at"),
+    return _ok(
+        {
+            "order_id": rec["order_id"],
+            "status": rec["status"],
+            "delivery_eta": rec.get("delivery_eta"),
+            "delivered_at": rec.get("delivered_at"),
+        }
     )
 
+
+@app.post("/cancel_order")
+async def cancel_order(raw: Dict[str, Any] = Body(...)):
+    order_id = _extract_order_id(raw)
+    if not order_id:
+        return _err("order_id missing from payload", 422)
+
+    rec = _find_order(order_id)
+    if not rec:
+        return _err(f"Order {order_id} not found", 404)
+    if not rec.get("can_cancel", False) or rec["status"] in {"dispatched", "delivered", "cancelled"}:
+        return _err("Order can no longer be cancelled", 400)
+
+    rec["status"] = "cancelled"
+    rec["can_cancel"] = False
+    return _ok({"order_id": order_id, "message": "Order cancelled successfully"})
+
+
+@app.post("/request_refund")
+async def request_refund(raw: Dict[str, Any] = Body(...)):
+    order_id = _extract_order_id(raw)
+    reason = (
+        raw.get("reason")
+        or raw.get("args", {}).get("reason")
+        or "unspecified"
+    )
+    if not order_id:
+        return _err("order_id missing from payload", 422)
+
+    rec = _find_order(order_id)
+    if not rec:
+        return _err(f"Order {order_id} not found", 404)
+    if not rec.get("eligible_for_refund", False):
+        return _err("Order not eligible for refund", 400)
+
+    refund_amount = round(sum(i.get("qty", 0) * 5 for i in rec.get("items", [])), 2)  # mock calc
+    rec["eligible_for_refund"] = False
+    return _ok(
+        {
+            "order_id": order_id,
+            "approved": True,
+            "refund_amount": refund_amount,
+            "reason": reason,
+        }
+    )
+
+
+@app.post("/create_ticket")
+async def create_ticket(raw: Dict[str, Any] = Body(...)):
+    args = raw.get("args", raw)
+    ticket_id = f"volt-{uuid.uuid4().hex[:8]}"
+    return _ok(
+        {
+            "ticket_id": ticket_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "details": args,
+        }
+    )
+
+
+@app.post("/log_call")
+async def log_call(raw: Dict[str, Any] = Body(...)):
+    return _ok({"stored": True, "received": raw})
+
+
+@app.post("/get_current_datetime")
+async def get_current_datetime(_: Dict[str, Any] = Body(...)):
+    now = datetime.now(timezone.utc)
+    return _ok({"date": now.date().isoformat(), "time": now.time().isoformat(timespec="seconds")})
+
 ###############################################################################
-# Add more endpoints following the same pattern whenever you wire additional
-# Function nodes (cancel_order, request_refund, etc.).
+# Add further endpoints following the same pattern.
 ###############################################################################
 
