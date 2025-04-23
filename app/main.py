@@ -3,6 +3,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 import json
+import os
 
 app = FastAPI()
 
@@ -14,8 +15,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-with open("retell_mock_full_dataset.json", "r") as f:
-    mock_data = json.load(f)
+try:
+    with open("retell_mock_full_dataset.json", "r") as f:
+        mock_data = json.load(f)
+except FileNotFoundError:
+    mock_data = {"orders": []}
+    print("⚠️ WARNING: Mock dataset not found. Using empty dataset.")
 
 orders = mock_data["orders"]
 
