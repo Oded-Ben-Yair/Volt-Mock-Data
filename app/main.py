@@ -1,110 +1,150 @@
+# app/main.py
+"""
+Volt × Retell mock back-end
+—————————————
+FastAPI service that implements the function-tool contract Retell.ai expects.
+It loads mock data from `retell_mock_full_dataset.json` that lives **next to
+this file** by default, but the path can be overridden with DATA_FILE env-var.
+"""
+
+import json
+import os
+import pathlib
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict
+
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
-import json, datetime, os
+from pydantic import BaseModel, Field
 
-DATA_FILE = os.getenv("DATA_FILE", "retell_mock_full_dataset.json")
+# --------------------------------------------------------------------------- #
+# ••• DATA LOADING •••
+# --------------------------------------------------------------------------- #
+BASE_DIR = pathlib.Path(__file__).parent
+DATA_FILE = pathlib.Path(os.getenv("DATA_FILE", BASE_DIR / "retell_mock_full_dataset.json")).resolve()
 
-# ----------  Helpers ----------
-def load_data():
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    orders = {o["order_id"]: o for o in data["orders"]}
-    return data, orders
+if not DATA_FILE.exists():
+    raise RuntimeError(
+        f"❌  DATA_FILE not found at {DATA_FILE}. "
+        "Mount it there or export DATA_FILE=/absolute/path.json"
+    )
 
-DATA, ORDERS = load_data()
-print(f"✅  loaded {len(ORDERS)} orders")
+with DATA_FILE.open(encoding="utf-8") as f:
+    DATA: Dict[str, Any] = json.load(f)
 
-def ok(data: Dict[str, Any]):          # standard 200 wrapper
-    return data
+ORDERS = {o["order_id"]: o for o in DATA["orders"]}
 
-def not_found(order_id: str):
-    raise HTTPException(status_code=404,
-                        detail=f"Order {order_id} not found")
+# --------------------------------------------------------------------------- #
+# ••• FASTAPI APP •••
+# --------------------------------------------------------------------------- #
+app = FastAPI(title="Volt Retell Mock Functions")
 
-def extract_args(body: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Retell always sends: {"args": {...}}
-    """
-    if "args" not in body or not isinstance(body["args"], dict):
-        raise HTTPException(400, detail="Payload must contain 'args' object")
-    return body["args"]
 
-# ----------  FastAPI ----------
-app = FastAPI()
+# ----------- Helper -------------------------------------------------------- #
+def tool_ok(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {"ok": True, "data": payload}
 
-@app.get("/")
-async def health():
-    return ok({"status": "ok", "ts": datetime.datetime.utcnow().isoformat()})
 
-# 1) check_order_status --------------------------------------------------------
+def tool_err(message: str, code: int = 400) -> Dict[str, Any]:
+    return {"ok": False, "error": {"code": code, "message": message}}
+
+
+def save():  # In-memory only for mock; extend if persistence is required
+    pass
+
+
+# ----------- Request / Response Schemas ----------------------------------- #
+class ArgsWrapper(BaseModel):
+    """Matches Retell's { "args": { … } } envelope."""
+    args: Dict[str, Any] = Field(...)
+
+
+# --------------------------------------------------------------------------- #
+# ••• FUNCTION ENDPOINTS •••
+# --------------------------------------------------------------------------- #
+
 @app.post("/check_order_status")
-async def check_order_status(body: Dict[str, Any]):
-    args = extract_args(body)
-    order_id = args.get("order_id")
+def check_order_status(payload: ArgsWrapper):
+    order_id = payload.args.get("order_id")
     order = ORDERS.get(order_id)
     if not order:
-        not_found(order_id)
+        return tool_err(f"Order {order_id} not found", 404)
+    return tool_ok(
+        {
+            "order_id": order_id,
+            "status": order["status"],
+            "delivery_eta": order["delivery_eta"],
+            "delivered_at": order["delivered_at"],
+        }
+    )
 
-    return ok({
-        "order_id": order_id,
-        "status": order["status"],
-        "delivery_eta": order.get("delivery_eta"),
-        "delivered_at": order.get("delivered_at")
-    })
 
-# 2) cancel_order --------------------------------------------------------------
 @app.post("/cancel_order")
-async def cancel_order(body: Dict[str, Any]):
-    args = extract_args(body)
-    order_id = args.get("order_id")
-    order = ORDERS.get(order_id) or not_found(order_id)
-
-    if not order["can_cancel"]:
-        raise HTTPException(400, detail="Order can no longer be cancelled")
+def cancel_order(payload: ArgsWrapper):
+    order_id = payload.args.get("order_id")
+    order = ORDERS.get(order_id)
+    if not order:
+        return tool_err(f"Order {order_id} not found", 404)
+    if not order["can_cancel"] or order["status"] in {"dispatched", "delivered", "cancelled"}:
+        return tool_err("Order can no longer be cancelled", 400)
 
     order["status"] = "cancelled"
     order["can_cancel"] = False
-    return ok({"order_id": order_id, "cancelled": True})
+    save()
+    return tool_ok({"order_id": order_id, "message": "Order cancelled successfully"})
 
-# 3) request_refund ------------------------------------------------------------
+
 @app.post("/request_refund")
-async def request_refund(body: Dict[str, Any]):
-    args = extract_args(body)
-    order_id = args.get("order_id")
-    reason   = args.get("reason")
-    order = ORDERS.get(order_id) or not_found(order_id)
-
+def request_refund(payload: ArgsWrapper):
+    order_id = payload.args.get("order_id")
+    reason = payload.args.get("reason", "unspecified")
+    order = ORDERS.get(order_id)
+    if not order:
+        return tool_err(f"Order {order_id} not found", 404)
     if not order["eligible_for_refund"]:
-        raise HTTPException(400,
-            detail=f"Order {order_id} is not eligible for refund")
+        return tool_err("Order not eligible for refund", 400)
+
+    refund_amount = round(sum(i["qty"] * 5 for i in order["items"]), 2)  # mock calc
     order["eligible_for_refund"] = False
-    return ok({"order_id": order_id,
-               "approved": True,
-               "reason": reason})
+    save()
+    return tool_ok(
+        {
+            "order_id": order_id,
+            "approved": True,
+            "refund_amount": refund_amount,
+            "reason": reason,
+        }
+    )
 
-# 4) create_ticket -------------------------------------------------------------
+
 @app.post("/create_ticket")
-async def create_ticket(body: Dict[str, Any]):
-    args = extract_args(body)
-    ticket_id = f"volt-{abs(hash(str(datetime.datetime.utcnow())))%10**10}"
-    return ok({ "ticket_id": ticket_id,
-                "issue_type": args.get("issue_type"),
-                "order_id":   args.get("order_id"),
-                "notes_saved": True })
+def create_ticket(payload: ArgsWrapper):
+    ticket_id = f"volt-{uuid.uuid4().hex[:8]}"
+    return tool_ok(
+        {
+            "ticket_id": ticket_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "details": payload.args,
+        }
+    )
 
-# 5) log_call ------------------------------------------------------------------
+
 @app.post("/log_call")
-async def log_call(body: Dict[str, Any]):
-    args = extract_args(body)
-    # Here you’d push to Slack / DB – we just print to logs
-    print("📝 LOG_CALL", args)
-    return ok({"stored": True})
+def log_call(payload: ArgsWrapper):
+    # Normally you'd push to Slack / DB; here we just echo.
+    return tool_ok({"stored": True, "received": payload.args})
 
-# 6) get_current_datetime ------------------------------------------------------
+
 @app.post("/get_current_datetime")
-async def get_current_datetime(_: Dict[str, Any]):
-    now = datetime.datetime.utcnow()
-    return ok({"date": now.strftime("%Y-%m-%d"),
-               "time": now.strftime("%H:%M:%S")})
+def get_current_datetime(_: ArgsWrapper):
+    now = datetime.now(timezone.utc)
+    return tool_ok({"date": now.date().isoformat(), "time": now.time().isoformat(timespec="seconds")})
+
+
+# --------------------------------------------------------------------------- #
+# ••• MISC •••
+# --------------------------------------------------------------------------- #
+@app.get("/health")
+def health():
+    return {"status": "ok", "dataset_rows": len(ORDERS)}
 
