@@ -1,0 +1,449 @@
+{
+  "generated_at": "2025-04-23 05:34:15.256712",
+  "orders": [
+    {
+      "order_id": "A2928",
+      "user_id": "U249",
+      "status": "cancelled",
+      "vendor_name": "QuickFood",
+      "order_type": "grocery",
+      "delivery_eta": null,
+      "delivered_at": null,
+      "items": [
+        {
+          "product_name": "Item 0",
+          "qty": 2
+        }
+      ],
+      "issues": [
+        "wrong_item"
+      ],
+      "can_cancel": false,
+      "eligible_for_refund": false
+    },
+    {
+      "order_id": "A4988",
+      "user_id": "U667",
+      "status": "pending",
+      "vendor_name": "Volt Market",
+      "order_type": "restaurant",
+      "delivery_eta": "51 min",
+      "delivered_at": null,
+      "items": [
+        {
+          "product_name": "Item 0",
+          "qty": 3
+        },
+        {
+          "product_name": "Item 1",
+          "qty": 2
+        },
+        {
+          "product_name": "Item 2",
+          "qty": 2
+        }
+      ],
+      "issues": [
+        "missing_item"
+      ],
+      "can_cancel": true,
+      "eligible_for_refund": false
+    },
+    {
+      "order_id": "A7872",
+      "user_id": "U773",
+      "status": "preparing",
+      "vendor_name": "Volt Market",
+      "order_type": "restaurant",
+      "delivery_eta": "50 min",
+      "delivered_at": null,
+      "items": [
+        {
+          "product_name": "Item 0",
+          "qty": 2
+        },
+        {
+          "product_name": "Item 1",
+          "qty": 3
+        }
+      ],
+      "issues": [
+        "missing_item"
+      ],
+      "can_cancel": true,
+      "eligible_for_refund": false
+    },
+    {
+      "order_id": "A3927",
+      "user_id": "U209",
+      "status": "preparing",
+      "vendor_name": "Bolt Grocery",
+      "order_type": "grocery",
+      "delivery_eta": "57 min",
+      "delivered_at": null,
+      "items": [
+        {
+          "product_name": "Item 0",
+          "qty": 1
+        },
+        {
+          "product_name": "Item 1",
+          "qty": 3
+        }
+      ],
+      "issues": [],
+      "can_cancel": true,
+      "eligible_for_refund": false
+    },
+    {
+      "order_id": "A1837",
+      "user_id": "U361",
+      "status": "preparing",
+      "vendor_name": "Bolt Grocery",
+      "order_type": "retail",
+      "delivery_eta": "46 min",
+      "delivered_at": null,
+      "items": [
+        {
+          "product_name": "Item 0",
+          "qty": 2
+        },
+        {
+          "product_name": "Item 1",
+          "qty": 3
+        },
+        {
+          "product_name": "Item 2",
+          "qty": 2
+        },
+        {
+          "product_name": "Item 3",
+          "qty": 2
+        }
+      ],
+      "issues": [
+        "spoiled"
+      ],
+      "can_cancel": true,
+      "eligible_for_refund": false
+    },
+    {
+      "order_id": "A3354",
+      "user_id": "U691",
+      "status": "delivered",
+      "vendor_name": "FreshMart",
+      "order_type": "grocery",
+      "delivery_eta": null,
+      "delivered_at": "2025-04-21",
+      "items": [
+        {
+          "product_name": "Item 0",
+          "qty": 3
+        },
+        {
+          "product_name": "Item 1",
+          "qty": 2
+        },
+        {
+          "product_name": "Item 2",
+          "qty": 2
+        },
+        {
+          "product_name": "Item 3",
+          "qty": 3
+        }
+      ],
+      "issues": [],
+      "can_cancel": false,
+      "eligible_for_refund": true
+    },
+    {
+      "order_id": "A2358",
+      "user_id": "U317",
+      "status": "pending",
+      "vendor_name": "Volt Market",
+      "order_type": "grocery",
+      "delivery_eta": "45 min",
+      "delivered_at": null,
+      "items": [
+        {
+          "product_name": "Item 0",
+          "qty": 1
+        },
+        {
+          "product_name": "Item 1",
+          "qty": 1
+        },
+        {
+          "product_name": "Item 2",
+          "qty": 2
+        },
+        {
+          "product_name": "Item 3",
+          "qty": 1
+        }
+      ],
+      "issues": [
+        "spoiled"
+      ],
+      "can_cancel": true,
+      "eligible_for_refund": false
+    },
+    {
+      "order_id": "A1970",
+      "user_id": "U924",
+      "status": "pending",
+      "vendor_name": "Volt Market",
+      "order_type": "grocery",
+      "delivery_eta": "42 min",
+      "delivered_at": null,
+      "items": [
+        {
+          "product_name": "Item 0",
+          "qty": 1
+        },
+        {
+          "product_name": "Item 1",
+          "qty": 1
+        }
+      ],
+      "issues": [],
+      "can_cancel": true,
+      "eligible_for_refund": false
+    },
+    {
+      "order_id": "A5315",
+      "user_id": "U197",
+      "status": "preparing",
+      "vendor_name": "FreshMart",
+      "order_type": "retail",
+      "delivery_eta": "29 min",
+      "delivered_at": null,
+      "items": [
+        {
+          "product_name": "Item 0",
+          "qty": 1
+        },
+        {
+          "product_name": "Item 1",
+          "qty": 3
+        }
+      ],
+      "issues": [],
+      "can_cancel": true,
+      "eligible_for_refund": false
+    },
+    {
+      "order_id": "A6288",
+      "user_id": "U590",
+      "status": "dispatched",
+      "vendor_name": "QuickFood",
+      "order_type": "retail",
+      "delivery_eta": "38 min",
+      "delivered_at": null,
+      "items": [
+        {
+          "product_name": "Item 0",
+          "qty": 3
+        }
+      ],
+      "issues": [],
+      "can_cancel": false,
+      "eligible_for_refund": false
+    }
+  ],
+  "products": [
+    {
+      "product_id": "SFQPNY",
+      "product_name": "Product 1",
+      "available_quantity": 33,
+      "availability_status": "in_stock",
+      "vendor": "FreshMart",
+      "price": 21.39
+    },
+    {
+      "product_id": "92F6DE",
+      "product_name": "Product 2",
+      "available_quantity": 31,
+      "availability_status": "in_stock",
+      "vendor": "QuickFood",
+      "price": 3.84
+    },
+    {
+      "product_id": "JRW26Z",
+      "product_name": "Product 3",
+      "available_quantity": 14,
+      "availability_status": "in_stock",
+      "vendor": "Bolt Grocery",
+      "price": 8.67
+    },
+    {
+      "product_id": "WVEJ2D",
+      "product_name": "Product 4",
+      "available_quantity": 44,
+      "availability_status": "in_stock",
+      "vendor": "QuickFood",
+      "price": 7.42
+    },
+    {
+      "product_id": "ZK0T19",
+      "product_name": "Product 5",
+      "available_quantity": 8,
+      "availability_status": "limited",
+      "vendor": "FreshMart",
+      "price": 17.1
+    },
+    {
+      "product_id": "I5KOD6",
+      "product_name": "Product 6",
+      "available_quantity": 46,
+      "availability_status": "in_stock",
+      "vendor": "Bolt Grocery",
+      "price": 3.0
+    },
+    {
+      "product_id": "S4CCK1",
+      "product_name": "Product 7",
+      "available_quantity": 10,
+      "availability_status": "limited",
+      "vendor": "QuickFood",
+      "price": 2.98
+    },
+    {
+      "product_id": "EIFTC1",
+      "product_name": "Product 8",
+      "available_quantity": 15,
+      "availability_status": "in_stock",
+      "vendor": "Bolt Grocery",
+      "price": 29.15
+    },
+    {
+      "product_id": "GYFSXD",
+      "product_name": "Product 9",
+      "available_quantity": 50,
+      "availability_status": "in_stock",
+      "vendor": "FreshMart",
+      "price": 25.44
+    },
+    {
+      "product_id": "TL165O",
+      "product_name": "Product 10",
+      "available_quantity": 50,
+      "availability_status": "in_stock",
+      "vendor": "Bolt Grocery",
+      "price": 5.43
+    },
+    {
+      "product_id": "JGIEFU",
+      "product_name": "Product 11",
+      "available_quantity": 12,
+      "availability_status": "in_stock",
+      "vendor": "Volt Market",
+      "price": 3.53
+    },
+    {
+      "product_id": "VB97WP",
+      "product_name": "Product 12",
+      "available_quantity": 46,
+      "availability_status": "in_stock",
+      "vendor": "FreshMart",
+      "price": 12.36
+    },
+    {
+      "product_id": "ZTJ4M8",
+      "product_name": "Product 13",
+      "available_quantity": 16,
+      "availability_status": "in_stock",
+      "vendor": "Volt Market",
+      "price": 5.56
+    },
+    {
+      "product_id": "YNZVIE",
+      "product_name": "Product 14",
+      "available_quantity": 26,
+      "availability_status": "in_stock",
+      "vendor": "Bolt Grocery",
+      "price": 10.11
+    },
+    {
+      "product_id": "LWK1R8",
+      "product_name": "Product 15",
+      "available_quantity": 27,
+      "availability_status": "in_stock",
+      "vendor": "Bolt Grocery",
+      "price": 29.84
+    }
+  ],
+  "users": [
+    {
+      "user_id": "U100",
+      "first_name": "Alex",
+      "email": "user1@example.com",
+      "preferred_language": "en",
+      "last_order_id": "A2358"
+    },
+    {
+      "user_id": "U101",
+      "first_name": "Jordan",
+      "email": "user2@example.com",
+      "preferred_language": "en",
+      "last_order_id": "A2928"
+    },
+    {
+      "user_id": "U102",
+      "first_name": "Sam",
+      "email": "user3@example.com",
+      "preferred_language": "ar",
+      "last_order_id": "A2358"
+    },
+    {
+      "user_id": "U103",
+      "first_name": "Dana",
+      "email": "user4@example.com",
+      "preferred_language": "en",
+      "last_order_id": "A6288"
+    }
+  ],
+  "edge_cases": [
+    {
+      "scenario": "order_without_id",
+      "description": "User asks status but provides no order id"
+    },
+    {
+      "scenario": "cancel_after_dispatch",
+      "description": "User tries cancel after order dispatched"
+    },
+    {
+      "scenario": "refund_not_eligible",
+      "description": "Request refund for order not eligible"
+    },
+    {
+      "scenario": "multiple_intents",
+      "description": "User asks to cancel and refund simultaneously"
+    },
+    {
+      "scenario": "speech_noise",
+      "description": "Mumbled speech causes ASR errors"
+    },
+    {
+      "scenario": "angry_customer",
+      "description": "User shows frustration and swears"
+    },
+    {
+      "scenario": "language_switch",
+      "description": "User switches from English to Hebrew mid-call"
+    },
+    {
+      "scenario": "background_noise",
+      "description": "Strong background noise"
+    },
+    {
+      "scenario": "invalid_product",
+      "description": "User asks for product not in inventory"
+    },
+    {
+      "scenario": "policy_ask",
+      "description": "User asks about obscure policy not in KB"
+    }
+  ]
+}
