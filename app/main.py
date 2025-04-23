@@ -6,12 +6,14 @@ main.py – FastAPI middleware for Retell.ai tool‑calls
   – _Wrapped_: `{ "args": { "order_id": "A3927", "execution_message": "…" } }`
   so we never hit a 422 again.
 • Returns a stable envelope Retell can parse: `{"ok": true|false, "data"|"error": …}`.
-• Keeps all responses `200 OK`; errors are surfaced in the JSON so the voice
-  agent can recover (“Could you read that ID back for me?”) instead of hanging up.
+• Adds an **/end_call** endpoint (and an `end_call` helper) so the LLM can explicitly
+  terminate the call with `{"ok": true, "data": {"hang_up": true}}` – Retell treats this as
+  a clean "<END CALL>" marker and closes the connection automatically.
+• Keeps all responses `200 OK`; errors surface in JSON so the voice agent can recover
+  (e.g. “Could you read that ID back for me?”) instead of hanging up.
 • Minimal stub dataset ships in‑memory; drop a richer JSON file via `DATA_FILE` env
   to override.
 """
-
 from __future__ import annotations
 
 import json
@@ -24,7 +26,7 @@ from typing import Any, Dict, Optional
 from fastapi import Body, FastAPI
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Volt Support Tool API", version="0.5.0")
+app = FastAPI(title="Volt Support Tool API", version="0.6.0")
 
 ###############################################################################
 # ─── DATA LOADING ────────────────────────────────────────────────────────────
@@ -65,19 +67,28 @@ def _find_order(order_id: str) -> Optional[dict]:
 # ─── RESPONSE HELPERS ────────────────────────────────────────────────────────
 ###############################################################################
 
-def _ok(data: Dict[str, Any]) -> Dict[str, Any]:
-    return {"ok": True, "data": data}
+def _ok(data: Dict[str, Any] | None = None, *, hang_up: bool = False) -> Dict[str, Any]:
+    """Standard success envelope. If *hang_up* is True we signal Retell to
+    terminate the call by adding `{"hang_up": true}` inside *data*.
+    """
+    payload: Dict[str, Any] = {}
+    if data:
+        payload.update(data)
+    if hang_up:
+        payload["hang_up"] = True  # Retell interprets this flag as <END CALL>
+    return {"ok": True, "data": payload}
 
 
 def _err(msg: str, code: int = 400) -> Dict[str, Any]:
     return {"ok": False, "error": {"code": code, "message": msg}}
 
 ###############################################################################
-# ─── ENDPOINTS ──────────────────────────────────────────────────────────────
+# ─── UTILS ───────────────────────────────────────────────────────────────────
 ###############################################################################
 
-class _CancelIn(BaseModel):
-    order_id: str = Field(..., examples=["A3927"])
+class _Payload(BaseModel):
+    """Generic wrapper to accept *any* JSON – validated later."""
+    __root__: Dict[str, Any]
 
 
 def _extract_order_id(payload: Dict[str, Any]) -> Optional[str]:
@@ -88,15 +99,22 @@ def _extract_order_id(payload: Dict[str, Any]) -> Optional[str]:
         return payload["args"].get("order_id")
     return None
 
+###############################################################################
+# ─── HEALTH ──────────────────────────────────────────────────────────────────
+###############################################################################
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
 
+###############################################################################
+# ─── CORE ENDPOINTS ─────────────────────────────────────────────────────────
+###############################################################################
 
 @app.post("/check_order_status")
-async def check_order_status(raw: Dict[str, Any] = Body(...)):
-    order_id = _extract_order_id(raw)
+async def check_order_status(raw: _Payload):
+    payload = raw.__root__
+    order_id = _extract_order_id(payload)
     if not order_id:
         return _err("order_id missing from payload", 422)
 
@@ -115,8 +133,9 @@ async def check_order_status(raw: Dict[str, Any] = Body(...)):
 
 
 @app.post("/cancel_order")
-async def cancel_order(raw: Dict[str, Any] = Body(...)):
-    order_id = _extract_order_id(raw)
+async def cancel_order(raw: _Payload):
+    payload = raw.__root__
+    order_id = _extract_order_id(payload)
     if not order_id:
         return _err("order_id missing from payload", 422)
 
@@ -132,11 +151,12 @@ async def cancel_order(raw: Dict[str, Any] = Body(...)):
 
 
 @app.post("/request_refund")
-async def request_refund(raw: Dict[str, Any] = Body(...)):
-    order_id = _extract_order_id(raw)
+async def request_refund(raw: _Payload):
+    payload = raw.__root__
+    order_id = _extract_order_id(payload)
     reason = (
-        raw.get("reason")
-        or raw.get("args", {}).get("reason")
+        payload.get("reason")
+        or payload.get("args", {}).get("reason")
         or "unspecified"
     )
     if not order_id:
@@ -161,8 +181,8 @@ async def request_refund(raw: Dict[str, Any] = Body(...)):
 
 
 @app.post("/create_ticket")
-async def create_ticket(raw: Dict[str, Any] = Body(...)):
-    args = raw.get("args", raw)
+async def create_ticket(raw: _Payload):
+    args = raw.__root__.get("args", raw.__root__)
     ticket_id = f"volt-{uuid.uuid4().hex[:8]}"
     return _ok(
         {
@@ -174,16 +194,30 @@ async def create_ticket(raw: Dict[str, Any] = Body(...)):
 
 
 @app.post("/log_call")
-async def log_call(raw: Dict[str, Any] = Body(...)):
-    return _ok({"stored": True, "received": raw})
+async def log_call(raw: _Payload):
+    return _ok({"stored": True, "received": raw.__root__})
 
 
 @app.post("/get_current_datetime")
-async def get_current_datetime(_: Dict[str, Any] = Body(...)):
+async def get_current_datetime(_: _Payload):
     now = datetime.now(timezone.utc)
     return _ok({"date": now.date().isoformat(), "time": now.time().isoformat(timespec="seconds")})
 
 ###############################################################################
-# Add further endpoints following the same pattern.
+# ─── END CALL HANDLER ───────────────────────────────────────────────────────
+###############################################################################
+
+@app.post("/end_call")
+async def end_call(raw: _Payload):  # payload ignored – LLM just calls the tool
+    """Explicitly tell Retell to hang up. The voice agent should call this when the
+    conversation goal is reached, e.g. after reading the final status or confirming
+    a refund. Retell closes the call as soon as it sees `hang_up: true` in the JSON.
+    """
+    return _ok({}, hang_up=True)
+
+###############################################################################
+# Add further endpoints following the same pattern – remember to use `_ok()` so
+# the voice agent can always parse the response, and `_err()` when something
+# goes wrong so it can recover instead of crashing.                           
 ###############################################################################
 
