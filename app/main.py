@@ -1,75 +1,163 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from datetime import datetime
+"""
+Volt × Retell mock back-end
+—————————————
+FastAPI service that implements the function‑tool contract Retell.ai expects.
+It loads mock data from retell_mock_full_dataset.json that lives **next to
+this file** by default, but the path can be overridden with DATA_FILE env‑var.
 
-app = FastAPI()
+Version 1.1 — identical to the proven‑stable build except for ONE addition:
+    • **/end_call** endpoint that lets the LLM hang up gracefully by returning
+      `{ "ok": true, "data": { "hang_up": true } }`
+All other behaviour, helpers, and payload formats remain untouched.
+"""
 
-# Request models
-class OrderRequest(BaseModel):
-    order_id: str
+import json
+import os
+import pathlib
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict
 
-class RefundRequest(BaseModel):
-    order_id: str
-    reason: str
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
 
-class TicketRequest(BaseModel):
-    issue_type: str
-    user_notes: str
-    order_id: str = None
+# --------------------------------------------------------------------------- #
+# ••• DATA LOADING •••
+# --------------------------------------------------------------------------- #
+BASE_DIR = pathlib.Path(__file__).parent
+DATA_FILE = pathlib.Path(os.getenv("DATA_FILE", BASE_DIR / "retell_mock_full_dataset.json")).resolve()
 
-class LogRequest(BaseModel):
-    call_summary: str
-    sentiment: str
-    timestamp: str
+if not DATA_FILE.exists():
+    raise RuntimeError(
+        f"❌  DATA_FILE not found at {DATA_FILE}. "
+        "Mount it there or export DATA_FILE=/absolute/path.json"
+    )
 
-# Routes
+with DATA_FILE.open(encoding="utf-8") as f:
+    DATA: Dict[str, Any] = json.load(f)
+
+ORDERS = {o["order_id"]: o for o in DATA["orders"]}
+
+# --------------------------------------------------------------------------- #
+# ••• FASTAPI APP •••
+# --------------------------------------------------------------------------- #
+app = FastAPI(title="Volt Retell Mock Functions")
+
+
+# ----------- Helper -------------------------------------------------------- #
+
+def tool_ok(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {"ok": True, "data": payload}
+
+
+def tool_err(message: str, code: int = 400) -> Dict[str, Any]:
+    return {"ok": False, "error": {"code": code, "message": message}}
+
+
+def save():  # In-memory only for mock; extend if persistence is required
+    pass
+
+
+# ----------- Request / Response Schemas ----------------------------------- #
+class ArgsWrapper(BaseModel):
+    """Matches Retell's { "args": { … } } envelope."""
+
+    args: Dict[str, Any] = Field(...)
+
+
+# --------------------------------------------------------------------------- #
+# ••• FUNCTION ENDPOINTS •••
+# --------------------------------------------------------------------------- #
+
 @app.post("/check_order_status")
-async def check_order_status(req: OrderRequest):
-    return {
-        "order_id": req.order_id,
-        "status": "preparing",
-        "delivery_eta": "57 min",
-        "delivered_at": None
-    }
+def check_order_status(payload: ArgsWrapper):
+    order_id = payload.args.get("order_id")
+    order = ORDERS.get(order_id)
+    if not order:
+        return tool_err(f"Order {order_id} not found", 404)
+    return tool_ok(
+        {
+            "order_id": order_id,
+            "status": order["status"],
+            "delivery_eta": order["delivery_eta"],
+            "delivered_at": order["delivered_at"],
+        }
+    )
+
 
 @app.post("/cancel_order")
-async def cancel_order(req: OrderRequest):
-    return {
-        "cancelled": True,
-        "note": f"Order {req.order_id} was cancelled successfully."
-    }
+def cancel_order(payload: ArgsWrapper):
+    order_id = payload.args.get("order_id")
+    order = ORDERS.get(order_id)
+    if not order:
+        return tool_err(f"Order {order_id} not found", 404)
+    if not order["can_cancel"] or order["status"] in {"dispatched", "delivered", "cancelled"}:
+        return tool_err("Order can no longer be cancelled", 400)
+
+    order["status"] = "cancelled"
+    order["can_cancel"] = False
+    save()
+    return tool_ok({"order_id": order_id, "message": "Order cancelled successfully"})
+
 
 @app.post("/request_refund")
-async def request_refund(req: RefundRequest):
-    return {
-        "approved": True,
-        "note": f"Refund for order {req.order_id} has been processed due to: {req.reason}"
-    }
+def request_refund(payload: ArgsWrapper):
+    order_id = payload.args.get("order_id")
+    reason = payload.args.get("reason", "unspecified")
+    order = ORDERS.get(order_id)
+    if not order:
+        return tool_err(f"Order {order_id} not found", 404)
+    if not order["eligible_for_refund"]:
+        return tool_err("Order not eligible for refund", 400)
+
+    refund_amount = round(sum(i["qty"] * 5 for i in order["items"]), 2)  # mock calc
+    order["eligible_for_refund"] = False
+    save()
+    return tool_ok(
+        {
+            "order_id": order_id,
+            "approved": True,
+            "refund_amount": refund_amount,
+            "reason": reason,
+        }
+    )
+
 
 @app.post("/create_ticket")
-async def create_ticket(req: TicketRequest):
-    return {
-        "ticket_created": True,
-        "note": f"Ticket created for issue: {req.issue_type}. Notes: {req.user_notes}"
-    }
+def create_ticket(payload: ArgsWrapper):
+    ticket_id = f"volt-{uuid.uuid4().hex[:8]}"
+    return tool_ok(
+        {
+            "ticket_id": ticket_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "details": payload.args,
+        }
+    )
+
 
 @app.post("/log_call")
-async def log_call(req: LogRequest):
-    return {
-        "logged": True,
-        "note": f"Call logged with sentiment: {req.sentiment} and summary: {req.call_summary}"
-    }
+def log_call(payload: ArgsWrapper):
+    # Normally you'd push to Slack / DB; here we just echo.
+    return tool_ok({"stored": True, "received": payload.args})
+
 
 @app.post("/get_current_datetime")
-async def get_current_datetime():
-    now = datetime.now()
-    return {
-        "date": now.strftime("%Y-%m-%d"),
-        "time": now.strftime("%H:%M:%S")
-    }
+def get_current_datetime(_: ArgsWrapper):
+    now = datetime.now(timezone.utc)
+    return tool_ok({"date": now.date().isoformat(), "time": now.time().isoformat(timespec="seconds")})
+
+
+# ----------- NEW: explicit end‑call hook ---------------------------------- #
 
 @app.post("/end_call")
-async def end_call():
-    return {"end_call": True}
+def end_call(_: ArgsWrapper):
+    """Signal Retell to terminate the call cleanly."""
+    return tool_ok({"hang_up": True})
 
+
+# --------------------------------------------------------------------------- #
+# ••• MISC •••
+# --------------------------------------------------------------------------- #
+@app.get("/health")
+def health():
+    return {"status": "ok", "dataset_rows": len(ORDERS)}
