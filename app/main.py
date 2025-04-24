@@ -71,6 +71,11 @@ class ArgsWrapper(BaseModel):
 
 @app.post("/check_order_status")
 def check_order_status(payload: ArgsWrapper):
+
+    # PII filter: Detect credit card numbers (simple pattern)
+    user_input = json.dumps(payload.args)
+    if re.search(r"\b\d{4} \d{4} \d{4} \d{4}\b", user_input):
+        return tool_err("Sensitive information like credit card numbers is not allowed.", 403)
     order_id = payload.args.get("order_id")
     order = ORDERS.get(order_id)
     if not order:
@@ -87,6 +92,11 @@ def check_order_status(payload: ArgsWrapper):
 
 @app.post("/cancel_order")
 def cancel_order(payload: ArgsWrapper):
+
+    # PII filter: Detect credit card numbers (simple pattern)
+    user_input = json.dumps(payload.args)
+    if re.search(r"\b\d{4} \d{4} \d{4} \d{4}\b", user_input):
+        return tool_err("Sensitive information like credit card numbers is not allowed.", 403)
     order_id = payload.args.get("order_id")
     order = ORDERS.get(order_id)
     if not order:
@@ -102,6 +112,11 @@ def cancel_order(payload: ArgsWrapper):
 
 @app.post("/request_refund")
 def request_refund(payload: ArgsWrapper):
+
+    # PII filter: Detect credit card numbers (simple pattern)
+    user_input = json.dumps(payload.args)
+    if re.search(r"\b\d{4} \d{4} \d{4} \d{4}\b", user_input):
+        return tool_err("Sensitive information like credit card numbers is not allowed.", 403)
     order_id = payload.args.get("order_id")
     reason = payload.args.get("reason", "unspecified")
     order = ORDERS.get(order_id)
@@ -125,6 +140,11 @@ def request_refund(payload: ArgsWrapper):
 
 @app.post("/create_ticket")
 def create_ticket(payload: ArgsWrapper):
+
+    # PII filter: Detect credit card numbers (simple pattern)
+    user_input = json.dumps(payload.args)
+    if re.search(r"\b\d{4} \d{4} \d{4} \d{4}\b", user_input):
+        return tool_err("Sensitive information like credit card numbers is not allowed.", 403)
     ticket_id = f"volt-{uuid.uuid4().hex[:8]}"
     return tool_ok(
         {
@@ -137,6 +157,11 @@ def create_ticket(payload: ArgsWrapper):
 
 @app.post("/log_call")
 def log_call(payload: ArgsWrapper):
+
+    # PII filter: Detect credit card numbers (simple pattern)
+    user_input = json.dumps(payload.args)
+    if re.search(r"\b\d{4} \d{4} \d{4} \d{4}\b", user_input):
+        return tool_err("Sensitive information like credit card numbers is not allowed.", 403)
     # Normally you'd push to Slack / DB; here we just echo.
     return tool_ok({"stored": True, "received": payload.args})
 
